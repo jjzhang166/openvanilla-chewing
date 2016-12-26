@@ -70,5 +70,8 @@ You could see [this blog article](http://ephrain.pixnet.net/blog/post/62635034) 
 # zip -r OVIMSpaceChewing.bundle.zip OVIMSpaceChewing.bundle
 ```
 
+## Known issues
+- Ctrl+Option quick symbol input is no longer supported.
+
 ## License
 As original OVIMSpaceChewing, Artistic License (for Modules/OVIMSpaceChewing folder).
