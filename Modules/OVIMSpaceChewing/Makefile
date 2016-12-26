@@ -34,14 +34,11 @@ SOURCES=OVIMSpaceChewing
 LIBCHEWING_PREFIX?=/usr/local
 LIBCHEWING_VERSION?=$(shell perl -n -e 'print "$$1\n" if /Version: (.+)/' < $(LIBCHEWING_PREFIX)/lib/pkgconfig/chewing.pc)
 
-DATA=$(LIBCHEWING_PREFIX)/share/chewing/ch_index.dat     \
-    $(LIBCHEWING_PREFIX)/share/chewing/dict.dat          \
-    $(LIBCHEWING_PREFIX)/share/chewing/fonetree.dat      \
-    $(LIBCHEWING_PREFIX)/share/chewing/ph_index.dat      \
+DATA=$(LIBCHEWING_PREFIX)/share/chewing/dictionary.dat   \
+    $(LIBCHEWING_PREFIX)/share/chewing/index_tree.dat    \
     $(LIBCHEWING_PREFIX)/share/chewing/pinyin.tab        \
     $(LIBCHEWING_PREFIX)/share/chewing/swkb.dat          \
-    $(LIBCHEWING_PREFIX)/share/chewing/symbols.dat       \
-    $(LIBCHEWING_PREFIX)/share/chewing/us_freq.dat
+    $(LIBCHEWING_PREFIX)/share/chewing/symbols.dat
     
 INC+=-I$(LIBCHEWING_PREFIX)/include/chewing
 CFLAGS+=-DLIBCHEWING_VERSION="\"$(LIBCHEWING_VERSION)\"" -g

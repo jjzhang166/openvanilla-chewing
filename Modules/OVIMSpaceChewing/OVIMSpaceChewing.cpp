@@ -15,6 +15,7 @@
 
 #include <sys/stat.h>
 #include <string>
+#include <stdlib.h>
 
 #include "chewing.h"
 #include "chewingio.h"
@@ -30,6 +31,21 @@
 
 using namespace std;
 
+static void verbose_logger(void *data, int level, const char *fmt, ...)
+{
+	// Remove this line for debugging
+	return;
+
+	va_list ap;
+	FILE *fp = fopen("/tmp/OVIMSpaceChewing.log", "a");
+
+	va_start(ap, fmt);
+	vfprintf(fp, fmt, ap);
+	va_end(ap);
+	fprintf(fp, "\r");
+	fclose(fp);
+}
+
 
 bool ChewingFileExist(const char *path, const char *file, const char *sep="/") {
     string fn;
@@ -43,37 +59,43 @@ bool ChewingFileExist(const char *path, const char *file, const char *sep="/") {
 }
 
 bool ChewingCheckData(const char *path) {
-    char *files[8]={
-        "ch_index.dat", 
-        "dict.dat", 
-        "fonetree.dat", 
-        "ph_index.dat", 
-        "pinyin.tab", 
-        "swkb.dat", 
-        "symbols.dat", 
-        "us_freq.dat"
+    const char *files[]={
+        "dictionary.dat",
+        "index_tree.dat",
+        "pinyin.tab",
+        "swkb.dat",
+        "symbols.dat",
+        NULL,
     };
     
-    for (int i=0; i<8; i++) if (!ChewingFileExist(path, files[i])) return false;
+    for (int i=0; files[i]; i++) if (!ChewingFileExist(path, files[i])) return false;
     return true;
 }
 
-CHEWING_API char *chewing_buffer_String_old( ChewingContext *chewingContext, int from, int to )
-{
-	int i;
-	char *s = (char *) calloc(
-		1 + chewingContext->output->chiSymbolBufLen,
-		sizeof(char) * MAX_UTF8_SIZE );
-	if(from >= 0 && to < chewingContext->output->chiSymbolBufLen ) {
-	   for ( i = from; i <= to; i++ ) {
-	      strcat( s, (char *) (chewingContext->output->chiSymbolBuf[ i ].s) );
-	   }
+int utf8_seek(const char *s, int pos) {
+	int slen = strlen(s);
+	int spos = 0;
+	for (int i = 0; i < pos && spos < slen; i++) {
+			unsigned char c = s[spos];
+			int char_len;
+			if (c < 0x80) {
+					char_len = 1;
+			} else if (c < 0xc0) {
+					break; // invalid
+			} else if (c < 0xe0) {
+					char_len = 2;
+			} else if (c < 0xf0) {
+					char_len = 3;
+			} else if (c < 0xf8) {
+					char_len = 4;
+			} else {
+					break; // invalid
+			}
+			spos += char_len;
 	}
-	return s;
-}
-
-CHEWING_API char *chewing_buffer_String_End_old( ChewingContext *chewingContext, int from) {
-	return chewing_buffer_String_old(chewingContext, from, chewingContext->output->chiSymbolBufLen -1 );
+	if (spos > slen)
+			spos = slen;
+	return spos;
 }
 
 class OVIMSpaceChewing;
@@ -157,8 +179,7 @@ protected:
 				chewing_handle_CtrlNum( im, (key->code()));
             }
 			else if(key->isAlt()) { 
-				#warning chewing_handle_CtrlOption not found in libchewing trunk
-				chewing_handle_CtrlOption(im, (key->code()));
+				// chewing_handle_CtrlOption is removed from libchewing.
 			}
             return;
         }
@@ -184,9 +205,7 @@ protected:
 		
         int ps=-1, pe=-1;
 		
-		// int ips= chewing_point_Start(im), ipe= chewing_point_End(im);
-		int ips = im->output->PointStart;
-		int ipe = im->output->PointEnd;
+	int ips=-1, ipe=0;
 		
         if (ips > -1 && ipe !=0) {
             if (ipe > 0) {
@@ -201,21 +220,26 @@ protected:
 		
         // murmur("ips=%d, ipe=%d, ps=%d, pe=%d\n", ips, ipe, ps, pe);
 		
-        const char *s1,*s2,*s3;
-		int zuin_count;
-		
-		#warning libchewing inconsistency in mod_aux.h and mod_aux.c, bug report needed
-		int pos = (int)chewing_cursor_Current(im);
-		
-        // murmur("==> %d\n", pos);
-		s1 = chewing_buffer_String_old( im, 0 , pos-1);
-        buf->clear()->append(s1);
-		
-		s2= chewing_zuin_String( im, &zuin_count);
-        buf->append(s2);
-		
-		s3= chewing_buffer_String_End_old( im, pos);
-		buf->append(s3)->update(pos, ps, pe);
+        const char *s1, *s2;
+		int s1len, s2len;
+		int pos = chewing_cursor_Current(im);
+		buf->clear();
+		s1 = chewing_buffer_String(im);
+		s1len = s1 ? strlen(s1) : 0;
+		s2 = chewing_bopomofo_String_static(im);
+		s2len = s2 ? strlen(s2) : 0;
+		int slen = s1len + s2len;
+		char *s = (char*)calloc(1, slen + 1);
+		if (s1) {
+				strcpy(s, s1);
+				chewing_free((void*)s1);
+		}
+		int spos = utf8_seek(s, pos);
+		memmove(s + spos + s2len, s + spos, s1len - spos);
+		memcpy(s + spos, s2, s2len);
+
+		buf->append(s);
+		buf->update(pos, ps, pe);
 		
         //murmur("==> %s%s%s",s1,s2,s3);
     }
@@ -236,12 +260,16 @@ protected:
 			while ( chewing_cand_hasNext( im ) ) {
 			   if ( i > chewing_cand_ChoicePerPage( im ) ) break;
 			   
-			   sprintf( str, "%c.", im->data->config.selKey[i - 1]);
+			   int *selKey = chewing_get_selKey(im);
+			   if (!selKey) break;
+			   sprintf( str, "%c.", selKey[i - 1]);
+			   chewing_free(selKey);
+
 			   textbar->append( str );
 			   cand_string = chewing_cand_String( im );
 			   sprintf( str, " %s ", cand_string );
 			   textbar->append( str );
-			   free( cand_string );
+			   chewing_free( cand_string );
 			   i++;
 			}
 			sprintf(s," %d/%d", chewing_cand_CurrentPage(im) + 1, chewing_cand_TotalPage(im));
@@ -266,15 +294,14 @@ public:
 
 	virtual ~OVIMSpaceChewing()
 	{
-		delete chewingContext;
+		chewing_delete(chewingContext);
 	}
 
 	virtual int initialize(OVDictionary* l, OVService* s, const char* modulePath) {
-		ChewingConfigData config;
-
         string hashdir;
         hashdir = s->userSpacePath(identifier());
-        // hashdir += s->pathSeparator();
+        hashdir += s->pathSeparator();
+        hashdir += "uhash.dat";
         
         string chewingpath;
 		
@@ -290,7 +317,6 @@ public:
 			chewingpath = buf;
 		#else
 			chewingpath = modulePath;
-			chewingpath += identifier();
 		#endif
         
 		if (!ChewingCheckData(chewingpath.c_str())) {
@@ -301,8 +327,7 @@ public:
 		murmur ("OVIMSpaceChewing: Chewing data=%s, userhash=%s",
 		  chewingpath.c_str(), hashdir.c_str());
 
-		chewing_Init(chewingpath.c_str(), hashdir.c_str());
-		chewingContext = chewing_new();
+		chewingContext = chewing_new2(chewingpath.c_str(), hashdir.c_str(), verbose_logger, NULL);
 
         // set default layout to Standard
         int kb = l->getIntegerWithDefault("keyboardLayout", 0);        
@@ -310,26 +335,23 @@ public:
 		
 		const char *selKey_define = "1234567890";
 		
-		if (kb==KB_HSU) selKey_define = "asdfghjkl0";
-		if (kb==KB_DVORAK_HSU) selKey_define = "aoeuhtn7890";
+		// XXX magic number
+		if (kb==1 /* KB_HSU */) selKey_define = "asdfghjkl0";
+		if (kb==7 /* KB_DVORAK_HSU */) selKey_define = "aoeuhtn7890";
 		
-		for (int i=0; i<MAX_SELKEY; i++) config.selKey[i] = selKey_define[i];
+		int *selKey = (int*)calloc(MAX_SELKEY, sizeof(int));
+		for (int i=0; i<MAX_SELKEY && selKey_define[i]; i++) selKey[i] = selKey_define[i];
+		chewing_set_selKey(chewingContext, selKey, strlen(selKey_define));
+		free(selKey);
 		
 
 		// Enable this, because this is called... SpaceChewing
-		config.bSpaceAsSelection = 1;
-		config.candPerPage = l->getIntegerWithDefault("candPerPage", 7);
-		config.maxChiSymbolLen = 20;
-		config.bAddPhraseForward = 0;
-		int dir = l->getIntegerWithDefault("addPhraseForward", 0);
-		config.bAddPhraseForward = dir;
-        // config.bEscCleanAllBuf = 0,
+		chewing_set_spaceAsSelection(chewingContext, 1);
 
-        // This seems to be removed
-		// config.selectAreaLen = 14;
-		
-		// Set configurations
-		chewing_Configure( chewingContext, &config );
+		chewing_set_candPerPage(chewingContext, l->getIntegerWithDefault("candPerPage", 7));
+		chewing_set_maxChiSymbolLen(chewingContext, 20);
+		int dir = l->getIntegerWithDefault("addPhraseForward", 0);
+		chewing_set_addPhraseDirection(chewingContext, dir);
 
 		return 1;
 	}
